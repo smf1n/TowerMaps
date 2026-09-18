@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tower Walk — Прогулка по башне</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; }
+
+  #hud {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    color: #fff;
+    font-family: monospace;
+    font-size: 14px;
+    text-shadow: 1px 1px 2px #000;
+    pointer-events: none;
+    user-select: none;
+    z-index: 10;
+  }
+
+  #crosshair {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 4px;
+    height: 4px;
+    background: #fff;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    opacity: 0.6;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  #start {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: sans-serif;
+    z-index: 100;
+    cursor: pointer;
+    text-align: center;
+    padding: 20px;
+  }
+
+  #start h1 {
+    font-size: 42px;
+    margin-bottom: 20px;
+    background: linear-gradient(90deg, #4facfe, #00f2fe);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  #start p {
+    font-size: 16px;
+    opacity: 0.8;
+    margin: 8px 0;
+    max-width: 500px;
+  }
+
+  #start .btn {
+    margin-top: 30px;
+    padding: 15px 40px;
+    background: #4facfe;
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+
+  #mobile-controls {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    display: none;
+    z-index: 20;
+  }
+
+  .joystick-zone {
+    position: absolute;
+    bottom: 20px;
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+    border: 2px solid rgba(255,255,255,0.3);
+    pointer-events: auto;
+    touch-action: none;
+  }
+
+  #move-stick { left: 20px; }
+  #look-zone {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 50%;
+    height: 100%;
+    pointer-events: auto;
+    touch-action: none;
+  }
+
+  .stick-knob {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.5);
+    transform: translate(-50%, -50%);
+  }
+
+  @media (max-width: 768px) {
+    #mobile-controls { display: block; }
+    #start h1 { font-size: 32px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="start">
+  <h1>🏔️ Tower Walk</h1>
+  <p>Прогулка по высокой башне</p>
+  <p><b>ПК:</b> WASD / стрелки — ходьба, мышь — обзор, Space — прыжок</p>
+  <p><b>Телефон:</b> левый джойстик — ходьба, правый свайп — обзор</p>
+  <p>Поднимайся всё выше и смотри на мир с высоты 🌍</p>
+  <button class="btn">НАЧАТЬ</button>
+</div>
+
+<div id="hud">
+  <div>Высота: <span id="height">0</span> м</div>
+  <div>Позиция: <span id="pos">0, 0</span></div>
+</div>
+
+<div id="crosshair"></div>
+
+<div id="mobile-controls">
+  <div class="joystick-zone" id="move-stick">
+    <div class="stick-knob" id="move-knob"></div>
+  </div>
+  <div id="look-zone"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ================================================================
+// TOWER WALK — Прогулка по высокой башне
+// Простая 3D-игра от первого лица
+// ================================================================
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 50, 500);
+
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 2000);
+camera.position.set(0, 2, 15);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// ===== СВЕТ =====
+const sun = new THREE.DirectionalLight(0xffffff, 1);
+sun.position.set(100, 200, 100);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -100;
+sun.shadow.camera.right = 100;
+sun.shadow.camera.top = 100;
+sun.shadow.camera.bottom = -100;
+scene.add(sun);
+
+const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambient);
+
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.4);
+scene.add(hemi);
+
+// ===== ЗЕМЛЯ =====
+const groundGeo = new THREE.PlaneGeometry(2000, 2000);
+const groundMat = new THREE.MeshLambertMaterial({ color: 0x3a7d44 });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// ===== ТРАВА (мелкие кубики для текстуры) =====
+for (let i = 0; i < 500; i++) {
+  const grass = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, 0.5 + Math.random() * 0.5, 0.3),
+    new THREE.MeshLambertMaterial({ color: 0x2d5e35 })
+  );
+  grass.position.set(
+    (Math.random() - 0.5) * 400,
+    0.25,
+    (Math.random() - 0.5) * 400
+  );
+  scene.add(grass);
+}
+
+// ===== ГОРЫ на фоне =====
+for (let i = 0; i < 30; i++) {
+  const angle = (i / 30) * Math.PI * 2;
+  const dist = 300 + Math.random() * 200;
+  const size = 40 + Math.random() * 80;
+  const h = 60 + Math.random() * 120;
+
+  const mountainGeo = new THREE.ConeGeometry(size, h, 5);
+  const mountainMat = new THREE.MeshLambertMaterial({
+    color: 0x556b2f,
+    flatShading: true
+  });
+  const mountain = new THREE.Mesh(mountainGeo, mountainMat);
+  mountain.position.set(
+    Math.cos(angle) * dist,
+    h / 2 - 10,
+    Math.sin(angle) * dist
+  );
+  scene.add(mountain);
+}
+
+// ===== БАШНЯ =====
+const TOWER_HEIGHT = 500;
+const TOWER_RADIUS = 8;
+const FLOOR_HEIGHT = 3.5;
+
+const towerGroup = new THREE.Group();
+scene.add(towerGroup);
+
+// Основной ствол башни
+const towerMat = new THREE.MeshLambertMaterial({ color: 0xd4c4a8 });
+const towerGeo = new THREE.CylinderGeometry(TOWER_RADIUS, TOWER_RADIUS * 1.4, TOWER_HEIGHT, 16, 1, true);
+const towerMesh = new THREE.Mesh(towerGeo, towerMat);
+towerMesh.position.y = TOWER_HEIGHT / 2;
+towerMesh.castShadow = true;
+towerMesh.receiveShadow = true;
+towerGroup.add(towerMesh);
+
+// Внутренний ствол (чтобы не проваливаться)
+const innerMat = new THREE.MeshLambertMaterial({ color: 0x8b7355, side: THREE.BackSide });
+const innerGeo = new THREE.CylinderGeometry(TOWER_RADIUS - 0.1, TOWER_RADIUS * 1.4 - 0.1, TOWER_HEIGHT, 16, 1, true);
+const innerMesh = new THREE.Mesh(innerGeo, innerMat);
+innerMesh.position.y = TOWER_HEIGHT / 2;
+towerGroup.add(innerMesh);
+
+// ===== ЭТАЖИ (площадки) и ЛЕСТНИЦЫ =====
+const floors = []; // {y, walkable}
+const stairs = []; // подъёмы
+
+const floorMat = new THREE.MeshLambertMaterial({ color: 0x9b8b6e });
+
+for (let i = 0; i < TOWER_HEIGHT / FLOOR_HEIGHT; i++) {
+  const y = i * FLOOR_HEIGHT;
+
+  // Площадка (кольцо)
+  const platformGeo = new THREE.RingGeometry(2, TOWER_RADIUS - 0.2, 16);
+  const platform = new THREE.Mesh(platformGeo, floorMat);
+  platform.rotation.x = -Math.PI / 2;
+  platform.position.y = y;
+  platform.receiveShadow = true;
+  towerGroup.add(platform);
+
+  floors.push({ y, innerRadius: 2, outerRadius: TOWER_RADIUS - 0.2 });
+
+  // Лестница — винтовая, между этажами
+  if (i < TOWER_HEIGHT / FLOOR_HEIGHT - 1) {
+    const stairSteps = 8;
+    const angleStart = i * 1.5;
+    const angleEnd = angleStart + Math.PI * 0.9;
+
+    for (let s = 0; s < stairSteps; s++) {
+      const t = s / stairSteps;
+      const angle = angleStart + (angleEnd - angleStart) * t;
+      const r = TOWER_RADIUS - 2.5;
+      const stepY = y + (t * FLOOR_HEIGHT) + 0.3;
+
+      const stepGeo = new THREE.BoxGeometry(1.8, 0.3, 1.2);
+      const stepMat = new THREE.MeshLambertMaterial({ color: 0x7d6a4f });
+      const step = new THREE.Mesh(stepGeo, stepMat);
+      step.position.set(
+        Math.cos(angle) * r,
+        stepY,
+        Math.sin(angle) * r
+      );
+      step.rotation.y = -angle;
+      step.castShadow = true;
+      step.receiveShadow = true;
+      towerGroup.add(step);
+
+      stairs.push({
+        x: Math.cos(angle) * r,
+        y: stepY,
+        z: Math.sin(angle) * r,
+        size: 1.8
+      });
+    }
+  }
+}
+
+// Центральный столб башни
+const centerPillarGeo = new THREE.CylinderGeometry(2, 2, TOWER_HEIGHT, 12);
+const centerPillarMat = new THREE.MeshLambertMaterial({ color: 0x6b5d4a });
+const centerPillar = new THREE.Mesh(centerPillarGeo, centerPillarMat);
+centerPillar.position.y = TOWER_HEIGHT / 2;
+centerPillar.castShadow = true;
+centerPillar.receiveShadow = true;
+towerGroup.add(centerPillar);
+
+// ===== ВЕРХНЯЯ ПЛОЩАДКА (смотровая) =====
+const topPlatformGeo = new THREE.CylinderGeometry(TOWER_RADIUS + 3, TOWER_RADIUS + 3, 1, 24);
+const topPlatformMat = new THREE.MeshLambertMaterial({ color: 0xb8a888 });
+const topPlatform = new THREE.Mesh(topPlatformGeo, topPlatformMat);
+topPlatform.position.y = TOWER_HEIGHT + 0.5;
+topPlatform.castShadow = true;
+topPlatform.receiveShadow = true;
+scene.add(topPlatform);
+
+// Перила
+for (let i = 0; i < 24; i++) {
+  const angle = (i / 24) * Math.PI * 2;
+  const railGeo = new THREE.BoxGeometry(0.3, 1.5, 0.3);
+  const railMat = new THREE.MeshLambertMaterial({ color: 0x654321 });
+  const rail = new THREE.Mesh(railGeo, railMat);
+  rail.position.set(
+    Math.cos(angle) * (TOWER_RADIUS + 2.8),
+    TOWER_HEIGHT + 1.5,
+    Math.sin(angle) * (TOWER_RADIUS + 2.8)
+  );
+  scene.add(rail);
+}
+
+// ===== ОБЛАКА =====
+for (let i = 0; i < 40; i++) {
+  const cloudGroup = new THREE.Group();
+  const parts = 3 + Math.floor(Math.random() * 3);
+
+  for (let p = 0; p < parts; p++) {
+    const cloudPart = new THREE.Mesh(
+      new THREE.SphereGeometry(8 + Math.random() * 8, 8, 8),
+      new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 })
+    );
+    cloudPart.position.set(
+      (Math.random() - 0.5) * 20,
+      (Math.random() - 0.5) * 5,
+      (Math.random() - 0.5) * 20
+    );
+    cloudGroup.add(cloudPart);
+  }
+
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 100 + Math.random() * 400;
+  cloudGroup.position.set(
+    Math.cos(angle) * dist,
+    30 + Math.random() * 200,
+    Math.sin(angle) * dist
+  );
+  scene.add(cloudGroup);
+}
+
+// ===== УПРАВЛЕНИЕ =====
+const keys = {};
+const player = {
+  position: new THREE.Vector3(0, FLOOR_HEIGHT, 12), // старт у башни
+  velocityY: 0,
+  onGround: true,
+  currentFloorY: FLOOR_HEIGHT,
+  eyeHeight: 1.7,
+  speed: 0.18,
+  jumpPower: 0.28,
+  radius: 0.5
+};
+
+let yaw = 0;
+let pitch = 0;
+
+document.addEventListener('keydown', e => keys[e.code] = true);
+document.addEventListener('keyup', e => keys[e.code] = false);
+
+// Мышь
+let mouseLocked = false;
+renderer.domElement.addEventListener('click', () => {
+  if (!mouseLocked) {
+    renderer.domElement.requestPointerLock();
+  }
+});
+document.addEventListener('pointerlockchange', () => {
+  mouseLocked = document.pointerLockElement === renderer.domElement;
+});
+document.addEventListener('mousemove', e => {
+  if (mouseLocked) {
+    yaw -= e.movementX * 0.002;
+    pitch -= e.movementY * 0.002;
+    pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+  }
+});
+
+// ===== МОБИЛЬНОЕ УПРАВЛЕНИЕ =====
+const moveStick = document.getElementById('move-stick');
+const moveKnob = document.getElementById('move-knob');
+const lookZone = document.getElementById('look-zone');
+
+let moveTouchId = null;
+let moveStartX = 0, moveStartY = 0;
+let moveDX = 0, moveDY = 0;
+
+let lookTouchId = null;
+let lookLastX = 0, lookLastY = 0;
+
+moveStick.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  moveTouchId = t.identifier;
+  const rect = moveStick.getBoundingClientRect();
+  moveStartX = rect.left + rect.width / 2;
+  moveStartY = rect.top + rect.height / 2;
+});
+
+moveStick.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === moveTouchId) {
+      let dx = t.clientX - moveStartX;
+      let dy = t.clientY - moveStartY;
+      const maxR = 50;
+      const len = Math.hypot(dx, dy);
+      if (len > maxR) {
+        dx = dx / len * maxR;
+        dy = dy / len * maxR;
+      }
+      moveDX = dx / maxR;
+      moveDY = dy / maxR;
+      moveKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+    }
+  }
+});
+
+const endMove = e => {
+  for (const t of e.changedTouches) {
+    if (t.identifier === moveTouchId) {
+      moveTouchId = null;
+      moveDX = 0;
+      moveDY = 0;
+      moveKnob.style.transform = 'translate(-50%, -50%)';
+    }
+  }
+};
+moveStick.addEventListener('touchend', endMove);
+moveStick.addEventListener('touchcancel', endMove);
+
+lookZone.addEventListener('touchstart', e => {
+  const t = e.changedTouches[0];
+  lookTouchId = t.identifier;
+  lookLastX = t.clientX;
+  lookLastY = t.clientY;
+});
+
+lookZone.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === lookTouchId) {
+      const dx = t.clientX - lookLastX;
+      const dy = t.clientY - lookLastY;
+      yaw -= dx * 0.005;
+      pitch -= dy * 0.005;
+      pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+      lookLastX = t.clientX;
+      lookLastY = t.clientY;
+    }
+  }
+});
+
+const endLook = e => {
+  for (const t of e.changedTouches) {
+    if (t.identifier === lookTouchId) {
+      lookTouchId = null;
+    }
+  }
+};
+lookZone.addEventListener('touchend', endLook);
+lookZone.addEventListener('touchcancel', endLook);
+
+// ===== СТАРТ =====
+document.getElementById('start').addEventListener('click', () => {
+  document.getElementById('start').style.display = 'none';
+  renderer.domElement.requestPointerLock?.();
+});
+
+// ===== ФИЗИКА / КОЛЛИЗИИ =====
+function getFloorHeightAt(x, z) {
+  // Проверяем площадки башни
+  const distFromCenter = Math.hypot(x, z);
+
+  if (distFromCenter < TOWER_RADIUS + 2.5) {
+    // Внутри башни — ищем ближайшую площадку ниже игрока
+    let bestFloor = 0;
+    for (const f of floors) {
+      if (f.y <= player.position.y + 0.5 && f.y > bestFloor) {
+        // Находимся ли на кольце (не в дырке)?
+        if (distFromCenter >= f.innerRadius || distFromCenter <= f.outerRadius) {
+          bestFloor = f.y;
+        }
+      }
+    }
+    return bestFloor;
+  }
+
+  // Вне башни — земля
+  return 0;
+}
+
+function checkStairs() {
+  // Если стоим на лестнице — поднимаемся
+  const px = player.position.x;
+  const pz = player.position.z;
+  const py = player.position.y;
+
+  for (const s of stairs) {
+    const dx = Math.abs(px - s.x);
+    const dz = Math.abs(pz - s.z);
+    if (dx < s.size && dz < s.size) {
+      if (Math.abs(py - s.y) < 0.5) {
+        return s.y + 0.15;
+      }
+    }
+  }
+  return null;
+}
+
+// ===== ГЛАВНЫЙ ЦИКЛ =====
+const heightEl = document.getElementById('height');
+const posEl = document.getElementById('pos');
+let clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  // Направление движения
+  let forward = 0;
+  let strafe = 0;
+
+  if (keys['KeyW'] || keys['ArrowUp']) forward += 1;
+  if (keys['KeyS'] || keys['ArrowDown']) forward -= 1;
+  if (keys['KeyA'] || keys['ArrowLeft']) strafe -= 1;
+  if (keys['KeyD'] || keys['ArrowRight']) strafe += 1;
+
+  // Мобильный джойстик
+  if (moveDY < -0.2) forward += Math.min(1, -moveDY);
+  if (moveDY > 0.2) forward -= Math.min(1, moveDY);
+  if (moveDX < -0.2) strafe -= Math.min(1, -moveDX);
+  if (moveDX > 0.2) strafe += Math.min(1, moveDX);
+
+  // Нормализуем
+  const len = Math.hypot(forward, strafe);
+  if (len > 1) {
+    forward /= len;
+    strafe /= len;
+  }
+
+  // Вектор направления
+  const forwardX = Math.sin(yaw);
+  const forwardZ = Math.cos(yaw);
+  const rightX = Math.cos(yaw);
+  const rightZ = -Math.sin(yaw);
+
+  const moveX = (forwardX * forward + rightX * strafe) * player.speed;
+  const moveZ = (forwardZ * forward + rightZ * strafe) * player.speed;
+
+  // Пробуем двигаться
+  const nextX = player.position.x + moveX;
+  const nextZ = player.position.z + moveZ;
+
+  // Простые коллизии со стенами башни (нельзя выйти наружу через стены)
+  const distFromCenter = Math.hypot(nextX, nextZ);
+  const maxRadius = TOWER_RADIUS + 2;
+  const minRadius = 2.2; // центральный столб
+
+  let finalX = nextX;
+  let finalZ = nextZ;
+
+  // Если внутри башни и пытаемся выйти за стену — блокируем
+  if (distFromCenter > maxRadius && distFromCenter < maxRadius + 1 && player.position.y > 1) {
+    const scale = maxRadius / distFromCenter;
+    finalX = nextX * scale;
+    finalZ = nextZ * scale;
+  }
+
+  // Если пытаемся зайти в центральный столб
+  if (distFromCenter < minRadius && player.position.y > 1) {
+    const scale = minRadius / distFromCenter;
+    finalX = nextX * scale;
+    finalZ = nextZ * scale;
+  }
+
+  player.position.x = finalX;
+  player.position.z = finalZ;
+
+  // Прыжок
+  if ((keys['Space'] || keys['KeyE']) && player.onGround) {
+    player.velocityY = player.jumpPower;
+    player.onGround = false;
+  }
+
+  // Гравитация
+  player.velocityY -= 0.012;
+  player.position.y += player.velocityY;
+
+  // Проверка лестницы — подъём
+  const stairY = checkStairs();
+  if (stairY !== null && player.onGround) {
+    player.position.y = Math.max(player.position.y, stairY);
+  }
+
+  // Проверка пола
+  const floorY = getFloorHeightAt(player.position.x, player.position.z);
+  if (player.position.y <= floorY) {
+    player.position.y = floorY;
+    player.velocityY = 0;
+    player.onGround = true;
+  } else {
+    player.onGround = false;
+  }
+
+  // Камера
+  camera.position.set(
+    player.position.x,
+    player.position.y + player.eyeHeight,
+    player.position.z
+  );
+
+  const lookDir = new THREE.Vector3(
+    Math.sin(yaw) * Math.cos(pitch),
+    Math.sin(pitch),
+    Math.cos(yaw) * Math.cos(pitch)
+  );
+  camera.lookAt(
+    camera.position.x + lookDir.x,
+    camera.position.y + lookDir.y,
+    camera.position.z + lookDir.z
+  );
+
+  // HUD
+  heightEl.textContent = Math.round(player.position.y);
+  posEl.textContent = `${Math.round(player.position.x)}, ${Math.round(player.position.z)}`;
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// ===== РЕСАЙЗ =====
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
